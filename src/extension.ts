@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext) {
   const provider = new TodoProvider(context);
   vscode.window.registerTreeDataProvider("todoTreeView", provider);
   context.subscriptions.push(
-    vscode.commands.registerCommand("todoTreeSimple.refresh", () =>
+    vscode.commands.registerCommand("codeTODO.refresh", () =>
       provider.refresh()
     )
   );

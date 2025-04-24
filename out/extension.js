@@ -17,7 +17,7 @@ const TAGS = ["BUG", "HACK", "FIXME", "TODO", "XXX"];
 function activate(context) {
     const provider = new TodoProvider(context);
     vscode.window.registerTreeDataProvider("todoTreeView", provider);
-    context.subscriptions.push(vscode.commands.registerCommand("todoTreeSimple.refresh", () => provider.refresh()));
+    context.subscriptions.push(vscode.commands.registerCommand("codeTODO.refresh", () => provider.refresh()));
     provider.refresh();
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc) => provider.refreshFile(doc)));
 }

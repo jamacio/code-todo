@@ -21,7 +21,7 @@
 
 1. Open **Visual Studio Code**.
 2. Go to the **Extensions (Ctrl+Shift+X)** tab.
-3. Search for `todoTreeSimple`.
+3. Search for `Code TODO`.
 4. Click **Install**.
 
 ---
@@ -95,7 +95,7 @@ When a file with tags is open:
 
 ## 🔄 Available Command
 
-- `todoTreeSimple.refresh`: Rescans the project and updates the TODO tree manually.
+- `codeTODO.refresh`: Rescans the project and updates the TODO tree manually.
 
 ---
 

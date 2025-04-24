@@ -19,14 +19,14 @@
     "url": "https://github.com/jamacio/code-todo.git"
   },
   "activationEvents": [
-    "onCommand:todoTreeSimple.refresh",
+    "onCommand:codeTODO.refresh",
     "onView:todoTreeView"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "todoTreeSimple.refresh",
+        "command": "codeTODO.refresh",
         "title": "Code TODO: Refresh"
       }
     ],
