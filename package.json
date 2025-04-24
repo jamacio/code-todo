@@ -1,0 +1,61 @@
+{
+  "name": "code-todo",
+  "publisher": "JamacioRocha",
+  "displayName": "Code TODO",
+  "description": "Displays TODO comments in a tree view and adds a new icon to the menu to show all files with TODO flags.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "bugs": {
+    "url": "https://github.com/jamacio/code-todo/issues"
+  },
+  "homepage": "https://github.com/jamacio/code-todo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jamacio/code-todo.git"
+  },
+  "activationEvents": [
+    "onCommand:todoTreeSimple.refresh",
+    "onView:todoTreeView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "todoTreeSimple.refresh",
+        "title": "Code TODO: Refresh"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "todoExplorer",
+          "title": "Code TODO",
+          "icon": "resources/todo.svg"
+        }
+      ]
+    },
+    "views": {
+      "todoExplorer": [
+        {
+          "id": "todoTreeView",
+          "name": "Code TODO"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/vscode": "^1.99.1",
+    "@types/node": "^22.14.1"
+  }
+}
