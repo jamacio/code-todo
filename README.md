@@ -21,8 +21,12 @@
 
 1. Open **Visual Studio Code**.
 2. Go to the **Extensions (Ctrl+Shift+X)** tab.
-3. Search for `Code TODO`.
+3. Search for `JamacioRocha.code-todo`.
 4. Click **Install**.
+
+## 🌐 Extension Page
+
+[Click here to visit the Code TODO extension page on the Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=JamacioRocha.code-todo)
 
 ---
 
