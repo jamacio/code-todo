@@ -1,4 +1,4 @@
-# 🧭 todoTreeSimple
+# 🧭 Code TODO
 
 > A simple and efficient extension to list and highlight tags like TODO, FIXME, BUG, HACK, and XXX in Visual Studio Code.
 
