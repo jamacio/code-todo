@@ -20,7 +20,10 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand("codeTODO.refresh", () => provider.refresh()));
     provider.refresh();
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc) => provider.refreshFile(doc)));
-    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()));
+    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        provider.reloadCache();
+        provider.refresh();
+    }));
 }
 class NodeItem extends vscode.TreeItem {
     constructor(label, collapsibleState, resourceUri) {
@@ -51,6 +54,9 @@ class TodoItem extends vscode.TreeItem {
 }
 function deactivate() { }
 class TodoProvider {
+    reloadCache() {
+        this.cache = this.context.globalState.get(this.getCacheKey(), {});
+    }
     constructor(context) {
         this.context = context;
         this.decorationType = vscode.window.createTextEditorDecorationType({
@@ -61,7 +67,7 @@ class TodoProvider {
         this.cache = {};
         this.fileMap = new Map();
         this.tree = [];
-        this.cache = this.context.globalState.get("todoCache", {});
+        this.cache = this.context.globalState.get(this.getCacheKey(), {});
         const wsFolders = vscode.workspace.workspaceFolders;
         if (wsFolders) {
             const rootPath = wsFolders[0].uri.fsPath;
@@ -72,7 +78,6 @@ class TodoProvider {
                         this.fileMap.set(filePath, todos.map((t) => new TodoItem(t.label, uri, t.line)));
                     }
                     else {
-                        // Não faz nada se não for array (ou pode limpar do fileMap)
                         this.fileMap.delete(filePath);
                     }
                 }
@@ -170,7 +175,6 @@ class TodoProvider {
                         Array.isArray(cachedTodos) &&
                         cachedTodos.length > 0 &&
                         cachedTodos[0].mtime === stat.mtime) {
-                        // ...igual...
                         this.fileMap.set(uri.fsPath, cachedTodos.map((t) => new TodoItem(t.label, uri, t.line)));
                         newCache[uri.fsPath] = cachedTodos;
                         needUpdate = false;
@@ -180,7 +184,6 @@ class TodoProvider {
                         !Array.isArray(cachedTodos) &&
                         cachedTodos.length === 0 &&
                         cachedTodos.mtime === stat.mtime) {
-                        // Arquivo sem TODOs e não mudou
                         this.fileMap.delete(uri.fsPath);
                         newCache[uri.fsPath] = cachedTodos;
                         needUpdate = false;
@@ -211,7 +214,6 @@ class TodoProvider {
                         }
                         else {
                             this.fileMap.delete(uri.fsPath);
-                            // Salva no cache mesmo sem TODOs, mas com mtime
                             newCache[uri.fsPath] = {
                                 mtime: stat ? stat.mtime : Date.now(),
                                 length: 0,
@@ -222,7 +224,7 @@ class TodoProvider {
                 this.cache = newCache;
                 this.buildTree();
                 this._onDidChange.fire(undefined);
-                yield this.context.globalState.update("todoCache", newCache);
+                yield this.context.globalState.update(this.getCacheKey(), newCache);
                 this.applyHighlights();
             }));
         });
@@ -266,9 +268,15 @@ class TodoProvider {
             }
             this.buildTree();
             this._onDidChange.fire(undefined);
-            yield this.context.globalState.update("todoCache", this.cache);
+            yield this.context.globalState.update(this.getCacheKey(), this.cache);
             this.applyHighlights();
         });
+    }
+    getCacheKey() {
+        const wsFolders = vscode.workspace.workspaceFolders;
+        if (!wsFolders || wsFolders.length === 0)
+            return "todoCache:default";
+        return "todoCache:" + wsFolders[0].uri.fsPath;
     }
     getTreeItem(element) {
         return element;

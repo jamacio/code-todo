@@ -19,7 +19,10 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh())
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      provider.reloadCache();
+      provider.refresh();
+    })
   );
 }
 
@@ -63,6 +66,9 @@ interface CachedTodo {
 }
 
 class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  public reloadCache() {
+    this.cache = this.context.globalState.get(this.getCacheKey(), {});
+  }
   private decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: new vscode.ThemeColor(
       "editor.wordHighlightStrongBackground"
@@ -79,7 +85,7 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private tree: NodeItem[] = [];
 
   constructor(private context: vscode.ExtensionContext) {
-    this.cache = this.context.globalState.get("todoCache", {});
+    this.cache = this.context.globalState.get(this.getCacheKey(), {});
     const wsFolders = vscode.workspace.workspaceFolders;
     if (wsFolders) {
       const rootPath = wsFolders[0].uri.fsPath;
@@ -268,7 +274,7 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         this.cache = newCache;
         this.buildTree();
         this._onDidChange.fire(undefined);
-        await this.context.globalState.update("todoCache", newCache);
+        await this.context.globalState.update(this.getCacheKey(), newCache);
         this.applyHighlights();
       }
     );
@@ -314,8 +320,14 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     this.buildTree();
     this._onDidChange.fire(undefined);
 
-    await this.context.globalState.update("todoCache", this.cache);
+    await this.context.globalState.update(this.getCacheKey(), this.cache);
     this.applyHighlights();
+  }
+
+  getCacheKey(): string {
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (!wsFolders || wsFolders.length === 0) return "todoCache:default";
+    return "todoCache:" + wsFolders[0].uri.fsPath;
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
