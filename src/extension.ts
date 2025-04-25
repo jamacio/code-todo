@@ -178,7 +178,7 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         title: "Scanning Code TODOs...",
       },
       async () => {
-        const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
+        const pattern = new RegExp(`\\b(${TAGS.join("|")})(:|\\s)`);
         const uris = await vscode.workspace.findFiles(
           "**/*.{ts,js,jsx,tsx,php,py,java,php}",
           "**/{vendor,node_modules,out,dist,build,lib,generated}/**"
@@ -251,7 +251,7 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   }
 
   async refreshFile(doc: vscode.TextDocument): Promise<void> {
-    const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
+    const pattern = new RegExp(`\\b(${TAGS.join("|")})(:|\\s)`);
     const uri = doc.uri;
     const items: TodoItem[] = [];
     let stat: vscode.FileStat | undefined;

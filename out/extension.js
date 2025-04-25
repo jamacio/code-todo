@@ -142,7 +142,7 @@ class TodoProvider {
                 location: vscode.ProgressLocation.Window,
                 title: "Scanning Code TODOs...",
             }, () => __awaiter(this, void 0, void 0, function* () {
-                const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
+                const pattern = new RegExp(`\\b(${TAGS.join("|")})(:|\\s)`);
                 const uris = yield vscode.workspace.findFiles("**/*.{ts,js,jsx,tsx,php,py,java,php}", "**/{vendor,node_modules,out,dist,build,lib,generated}/**");
                 const newCache = {};
                 const wsFolders = vscode.workspace.workspaceFolders;
@@ -163,13 +163,11 @@ class TodoProvider {
                         stat &&
                         cachedTodos.length > 0 &&
                         cachedTodos[0].mtime === stat.mtime) {
-                        // Arquivo não mudou, usa cache
                         useCache = true;
                         this.fileMap.set(uri.fsPath, cachedTodos.map((t) => new TodoItem(t.label, uri, t.line)));
                         newCache[uri.fsPath] = cachedTodos;
                     }
                     if (!useCache) {
-                        // Arquivo mudou ou não está no cache, faz scan
                         const doc = yield vscode.workspace.openTextDocument(uri);
                         const items = [];
                         for (let i = 0; i < doc.lineCount; i++) {
@@ -205,7 +203,7 @@ class TodoProvider {
     }
     refreshFile(doc) {
         return __awaiter(this, void 0, void 0, function* () {
-            const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
+            const pattern = new RegExp(`\\b(${TAGS.join("|")})(:|\\s)`);
             const uri = doc.uri;
             const items = [];
             let stat;
