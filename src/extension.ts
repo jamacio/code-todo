@@ -72,7 +72,9 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private _onDidChange = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChange.event;
 
-  private cache: { [file: string]: CachedTodo[] } = {};
+  private cache: {
+    [file: string]: CachedTodo[] | { mtime: number; length: 0 };
+  } = {};
   private fileMap = new Map<string, TodoItem[]>();
   private tree: NodeItem[] = [];
 
@@ -84,10 +86,14 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
       for (const [filePath, todos] of Object.entries(this.cache)) {
         if (filePath.startsWith(rootPath)) {
           const uri = vscode.Uri.file(filePath);
-          this.fileMap.set(
-            filePath,
-            todos.map((t) => new TodoItem(t.label, uri, t.line))
-          );
+          if (Array.isArray(todos)) {
+            this.fileMap.set(
+              filePath,
+              todos.map((t) => new TodoItem(t.label, uri, t.line))
+            );
+          } else {
+            this.fileMap.delete(filePath);
+          }
         }
       }
     }
@@ -190,7 +196,6 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         }
 
         for (const uri of uris) {
-          let useCache = false;
           let cachedTodos = this.cache[uri.fsPath];
           let stat: vscode.FileStat | undefined;
           try {
@@ -198,21 +203,34 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
           } catch {
             stat = undefined;
           }
+
+          let needUpdate = true;
           if (
             cachedTodos &&
             stat &&
+            Array.isArray(cachedTodos) &&
             cachedTodos.length > 0 &&
             cachedTodos[0].mtime === stat.mtime
           ) {
-            useCache = true;
             this.fileMap.set(
               uri.fsPath,
               cachedTodos.map((t) => new TodoItem(t.label, uri, t.line))
             );
             newCache[uri.fsPath] = cachedTodos;
+            needUpdate = false;
+          } else if (
+            cachedTodos &&
+            stat &&
+            !Array.isArray(cachedTodos) &&
+            cachedTodos.length === 0 &&
+            cachedTodos.mtime === stat.mtime
+          ) {
+            this.fileMap.delete(uri.fsPath);
+            newCache[uri.fsPath] = cachedTodos;
+            needUpdate = false;
           }
 
-          if (!useCache) {
+          if (needUpdate) {
             const doc = await vscode.workspace.openTextDocument(uri);
             const items: TodoItem[] = [];
             for (let i = 0; i < doc.lineCount; i++) {
@@ -238,6 +256,12 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
                 line: i.line,
                 mtime: stat ? stat.mtime : Date.now(),
               }));
+            } else {
+              this.fileMap.delete(uri.fsPath);
+              newCache[uri.fsPath] = {
+                mtime: stat ? stat.mtime : Date.now(),
+                length: 0,
+              };
             }
           }
         }

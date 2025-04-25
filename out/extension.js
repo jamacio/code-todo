@@ -68,7 +68,13 @@ class TodoProvider {
             for (const [filePath, todos] of Object.entries(this.cache)) {
                 if (filePath.startsWith(rootPath)) {
                     const uri = vscode.Uri.file(filePath);
-                    this.fileMap.set(filePath, todos.map((t) => new TodoItem(t.label, uri, t.line)));
+                    if (Array.isArray(todos)) {
+                        this.fileMap.set(filePath, todos.map((t) => new TodoItem(t.label, uri, t.line)));
+                    }
+                    else {
+                        // Não faz nada se não for array (ou pode limpar do fileMap)
+                        this.fileMap.delete(filePath);
+                    }
                 }
             }
         }
@@ -150,7 +156,6 @@ class TodoProvider {
                     return;
                 }
                 for (const uri of uris) {
-                    let useCache = false;
                     let cachedTodos = this.cache[uri.fsPath];
                     let stat;
                     try {
@@ -159,15 +164,28 @@ class TodoProvider {
                     catch (_a) {
                         stat = undefined;
                     }
+                    let needUpdate = true;
                     if (cachedTodos &&
                         stat &&
+                        Array.isArray(cachedTodos) &&
                         cachedTodos.length > 0 &&
                         cachedTodos[0].mtime === stat.mtime) {
-                        useCache = true;
+                        // ...igual...
                         this.fileMap.set(uri.fsPath, cachedTodos.map((t) => new TodoItem(t.label, uri, t.line)));
                         newCache[uri.fsPath] = cachedTodos;
+                        needUpdate = false;
                     }
-                    if (!useCache) {
+                    else if (cachedTodos &&
+                        stat &&
+                        !Array.isArray(cachedTodos) &&
+                        cachedTodos.length === 0 &&
+                        cachedTodos.mtime === stat.mtime) {
+                        // Arquivo sem TODOs e não mudou
+                        this.fileMap.delete(uri.fsPath);
+                        newCache[uri.fsPath] = cachedTodos;
+                        needUpdate = false;
+                    }
+                    if (needUpdate) {
                         const doc = yield vscode.workspace.openTextDocument(uri);
                         const items = [];
                         for (let i = 0; i < doc.lineCount; i++) {
@@ -190,6 +208,14 @@ class TodoProvider {
                                 line: i.line,
                                 mtime: stat ? stat.mtime : Date.now(),
                             }));
+                        }
+                        else {
+                            this.fileMap.delete(uri.fsPath);
+                            // Salva no cache mesmo sem TODOs, mas com mtime
+                            newCache[uri.fsPath] = {
+                                mtime: stat ? stat.mtime : Date.now(),
+                                length: 0,
+                            };
                         }
                     }
                 }
