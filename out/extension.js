@@ -20,6 +20,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand("codeTODO.refresh", () => provider.refresh()));
     provider.refresh();
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc) => provider.refreshFile(doc)));
+    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()));
 }
 class NodeItem extends vscode.TreeItem {
     constructor(label, collapsibleState, resourceUri) {
@@ -61,9 +62,15 @@ class TodoProvider {
         this.fileMap = new Map();
         this.tree = [];
         this.cache = this.context.globalState.get("todoCache", {});
-        for (const [filePath, todos] of Object.entries(this.cache)) {
-            const uri = vscode.Uri.file(filePath);
-            this.fileMap.set(filePath, todos.map((t) => new TodoItem(t.label, uri, t.line)));
+        const wsFolders = vscode.workspace.workspaceFolders;
+        if (wsFolders) {
+            const rootPath = wsFolders[0].uri.fsPath;
+            for (const [filePath, todos] of Object.entries(this.cache)) {
+                if (filePath.startsWith(rootPath)) {
+                    const uri = vscode.Uri.file(filePath);
+                    this.fileMap.set(filePath, todos.map((t) => new TodoItem(t.label, uri, t.line)));
+                }
+            }
         }
         this.buildTree();
         vscode.window.onDidChangeActiveTextEditor(() => {
@@ -135,7 +142,6 @@ class TodoProvider {
                 location: vscode.ProgressLocation.Window,
                 title: "Scanning Code TODOs...",
             }, () => __awaiter(this, void 0, void 0, function* () {
-                this.fileMap.clear();
                 const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
                 const uris = yield vscode.workspace.findFiles("**/*.{ts,js,jsx,tsx,php,py,java,php}", "**/{vendor,node_modules,out,dist,build,lib,generated}/**");
                 const newCache = {};
@@ -144,31 +150,54 @@ class TodoProvider {
                     return;
                 }
                 for (const uri of uris) {
-                    const doc = yield vscode.workspace.openTextDocument(uri);
-                    const items = [];
-                    for (let i = 0; i < doc.lineCount; i++) {
-                        const text = doc.lineAt(i).text;
-                        if (pattern.test(text)) {
-                            const match = text.match(pattern);
-                            if (match) {
-                                const tag = match[1];
-                                const label = text
-                                    .replace(new RegExp(`^.*?\\b(?:${TAGS.join("|")})[:]?\s*`, "i"), "")
-                                    .trim();
-                                items.push(new TodoItem(`[${tag}] ${label}`, uri, i));
+                    let useCache = false;
+                    let cachedTodos = this.cache[uri.fsPath];
+                    let stat;
+                    try {
+                        stat = yield vscode.workspace.fs.stat(uri);
+                    }
+                    catch (_a) {
+                        stat = undefined;
+                    }
+                    if (cachedTodos &&
+                        stat &&
+                        cachedTodos.length > 0 &&
+                        cachedTodos[0].mtime === stat.mtime) {
+                        // Arquivo não mudou, usa cache
+                        useCache = true;
+                        this.fileMap.set(uri.fsPath, cachedTodos.map((t) => new TodoItem(t.label, uri, t.line)));
+                        newCache[uri.fsPath] = cachedTodos;
+                    }
+                    if (!useCache) {
+                        // Arquivo mudou ou não está no cache, faz scan
+                        const doc = yield vscode.workspace.openTextDocument(uri);
+                        const items = [];
+                        for (let i = 0; i < doc.lineCount; i++) {
+                            const text = doc.lineAt(i).text;
+                            if (pattern.test(text)) {
+                                const match = text.match(pattern);
+                                if (match) {
+                                    const tag = match[1];
+                                    const label = text
+                                        .replace(new RegExp(`^.*?\\b(?:${TAGS.join("|")})[:]?\s*`, "i"), "")
+                                        .trim();
+                                    items.push(new TodoItem(`[${tag}] ${label}`, uri, i));
+                                }
                             }
                         }
-                    }
-                    if (items.length) {
-                        this.fileMap.set(uri.fsPath, items);
-                        newCache[uri.fsPath] = items.map((i) => ({
-                            label: i.label,
-                            line: i.line,
-                        }));
-                        this.buildTree();
-                        this._onDidChange.fire(undefined);
+                        if (items.length) {
+                            this.fileMap.set(uri.fsPath, items);
+                            newCache[uri.fsPath] = items.map((i) => ({
+                                label: i.label,
+                                line: i.line,
+                                mtime: stat ? stat.mtime : Date.now(),
+                            }));
+                        }
                     }
                 }
+                this.cache = newCache;
+                this.buildTree();
+                this._onDidChange.fire(undefined);
                 yield this.context.globalState.update("todoCache", newCache);
                 this.applyHighlights();
             }));
@@ -179,6 +208,13 @@ class TodoProvider {
             const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
             const uri = doc.uri;
             const items = [];
+            let stat;
+            try {
+                stat = yield vscode.workspace.fs.stat(uri);
+            }
+            catch (_a) {
+                stat = undefined;
+            }
             for (let i = 0; i < doc.lineCount; i++) {
                 const text = doc.lineAt(i).text;
                 if (pattern.test(text)) {
@@ -197,6 +233,7 @@ class TodoProvider {
                 this.cache[uri.fsPath] = items.map((i) => ({
                     label: i.label,
                     line: i.line,
+                    mtime: stat ? stat.mtime : Date.now(),
                 }));
             }
             else {

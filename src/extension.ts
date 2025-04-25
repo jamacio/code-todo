@@ -17,6 +17,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => provider.refreshFile(doc))
   );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh())
+  );
 }
 
 class NodeItem extends vscode.TreeItem {
@@ -52,6 +56,12 @@ class TodoItem extends vscode.TreeItem {
 
 export function deactivate() {}
 
+interface CachedTodo {
+  label: string;
+  line: number;
+  mtime: number;
+}
+
 class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private decorationType = vscode.window.createTextEditorDecorationType({
     backgroundColor: new vscode.ThemeColor(
@@ -62,18 +72,24 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private _onDidChange = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChange.event;
 
-  private cache: { [file: string]: { label: string; line: number }[] } = {};
+  private cache: { [file: string]: CachedTodo[] } = {};
   private fileMap = new Map<string, TodoItem[]>();
   private tree: NodeItem[] = [];
 
   constructor(private context: vscode.ExtensionContext) {
     this.cache = this.context.globalState.get("todoCache", {});
-    for (const [filePath, todos] of Object.entries(this.cache)) {
-      const uri = vscode.Uri.file(filePath);
-      this.fileMap.set(
-        filePath,
-        todos.map((t) => new TodoItem(t.label, uri, t.line))
-      );
+    const wsFolders = vscode.workspace.workspaceFolders;
+    if (wsFolders) {
+      const rootPath = wsFolders[0].uri.fsPath;
+      for (const [filePath, todos] of Object.entries(this.cache)) {
+        if (filePath.startsWith(rootPath)) {
+          const uri = vscode.Uri.file(filePath);
+          this.fileMap.set(
+            filePath,
+            todos.map((t) => new TodoItem(t.label, uri, t.line))
+          );
+        }
+      }
     }
     this.buildTree();
 
@@ -162,7 +178,6 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         title: "Scanning Code TODOs...",
       },
       async () => {
-        this.fileMap.clear();
         const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
         const uris = await vscode.workspace.findFiles(
           "**/*.{ts,js,jsx,tsx,php,py,java,php}",
@@ -175,34 +190,60 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
         }
 
         for (const uri of uris) {
-          const doc = await vscode.workspace.openTextDocument(uri);
-          const items: TodoItem[] = [];
-          for (let i = 0; i < doc.lineCount; i++) {
-            const text = doc.lineAt(i).text;
-            if (pattern.test(text)) {
-              const match = text.match(pattern);
-              if (match) {
-                const tag = match[1];
-                const label = text
-                  .replace(
-                    new RegExp(`^.*?\\b(?:${TAGS.join("|")})[:]?\s*`, "i"),
-                    ""
-                  )
-                  .trim();
-                items.push(new TodoItem(`[${tag}] ${label}`, uri, i));
+          let useCache = false;
+          let cachedTodos = this.cache[uri.fsPath];
+          let stat: vscode.FileStat | undefined;
+          try {
+            stat = await vscode.workspace.fs.stat(uri);
+          } catch {
+            stat = undefined;
+          }
+          if (
+            cachedTodos &&
+            stat &&
+            cachedTodos.length > 0 &&
+            cachedTodos[0].mtime === stat.mtime
+          ) {
+            useCache = true;
+            this.fileMap.set(
+              uri.fsPath,
+              cachedTodos.map((t) => new TodoItem(t.label, uri, t.line))
+            );
+            newCache[uri.fsPath] = cachedTodos;
+          }
+
+          if (!useCache) {
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const items: TodoItem[] = [];
+            for (let i = 0; i < doc.lineCount; i++) {
+              const text = doc.lineAt(i).text;
+              if (pattern.test(text)) {
+                const match = text.match(pattern);
+                if (match) {
+                  const tag = match[1];
+                  const label = text
+                    .replace(
+                      new RegExp(`^.*?\\b(?:${TAGS.join("|")})[:]?\s*`, "i"),
+                      ""
+                    )
+                    .trim();
+                  items.push(new TodoItem(`[${tag}] ${label}`, uri, i));
+                }
               }
             }
-          }
-          if (items.length) {
-            this.fileMap.set(uri.fsPath, items);
-            newCache[uri.fsPath] = items.map((i) => ({
-              label: i.label,
-              line: i.line,
-            }));
-            this.buildTree();
-            this._onDidChange.fire(undefined);
+            if (items.length) {
+              this.fileMap.set(uri.fsPath, items);
+              newCache[uri.fsPath] = items.map((i) => ({
+                label: i.label,
+                line: i.line,
+                mtime: stat ? stat.mtime : Date.now(),
+              }));
+            }
           }
         }
+        this.cache = newCache;
+        this.buildTree();
+        this._onDidChange.fire(undefined);
         await this.context.globalState.update("todoCache", newCache);
         this.applyHighlights();
       }
@@ -213,6 +254,12 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
     const pattern = new RegExp(`\\b(${TAGS.join("|")})[:]?`);
     const uri = doc.uri;
     const items: TodoItem[] = [];
+    let stat: vscode.FileStat | undefined;
+    try {
+      stat = await vscode.workspace.fs.stat(uri);
+    } catch {
+      stat = undefined;
+    }
 
     for (let i = 0; i < doc.lineCount; i++) {
       const text = doc.lineAt(i).text;
@@ -233,6 +280,7 @@ class TodoProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
       this.cache[uri.fsPath] = items.map((i) => ({
         label: i.label,
         line: i.line,
+        mtime: stat ? stat.mtime : Date.now(),
       }));
     } else {
       this.fileMap.delete(uri.fsPath);
