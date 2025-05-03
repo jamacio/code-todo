@@ -6,10 +6,10 @@ const readline = require("readline");
 
 const TAGS = ["BUG", "HACK", "FIXME", "TODO", "XXX"];
 const TAG_PATTERN = `\\b(${TAGS.join("|")})(?=\\s|:)[:]?\\s*(.*)`;
-const CACHE_VERSION = 7;
-const MAX_FILES = 20000;
+const CACHE_VERSION = 9;
+const MAX_FILES = 50000;
 const BATCH_SIZE = 200;
-const DEBOUNCE_TIME = 100;
+const DEBOUNCE_TIME = 50;
 
 class UltimateTodoProvider {
   constructor(context) {
@@ -19,12 +19,14 @@ class UltimateTodoProvider {
     this.activeOperations = new Set();
     this.processingQueue = [];
     this.debounceTimer = null;
-    this.isInitialScanComplete = false;
+    this.isInitialized = false;
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
       overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.addedForeground"),
-      backgroundColor: "white",
-      border: "1px solid white",
+      backgroundColor: "rgba(255, 255, 255, 0.68)",
+      border: "1px solid rgba(255, 255, 255, 0.68)",
+      borderRadius: "3px",
+      overviewRulerLane: vscode.OverviewRulerLane.Right,
     });
 
     this._onDidChange = new vscode.EventEmitter();
@@ -36,19 +38,19 @@ class UltimateTodoProvider {
     this.showCachedData();
     this.setupWatchers();
     await this.backgroundFullScan();
+    this.isInitialized = true;
   }
 
   async backgroundFullScan() {
     try {
       const uris = await vscode.workspace.findFiles(
-        "**/*",
+        "**/*.{js,ts,jsx,tsx,php,py,java,cs,cpp,h,html,css,md,json}",
         "**/{node_modules,vendor,dist,out,build,.git}/**",
         MAX_FILES
       );
 
-      await this.processFileBatch(uris.map(uri => uri.fsPath));
-      this.isInitialScanComplete = true;
-      this.updateView();
+      await this.processFileBatch(uris.map(uri => uri.fsPath), true);
+      this.updateView(true);
     } catch (error) {
       vscode.window.showErrorMessage(`Background scan failed: ${error.message}`);
     }
@@ -64,7 +66,7 @@ class UltimateTodoProvider {
     this.context.subscriptions.push(
       watcher,
       watcher.onDidChange(uri => this.queueProcessing(uri, true)),
-      watcher.onDidCreate(uri => this.handleNewFile(uri)),
+      watcher.onDidCreate(uri => this.queueProcessing(uri, true)),
       watcher.onDidDelete(uri => this.handleFileDelete(uri))
     );
   }
@@ -88,20 +90,35 @@ class UltimateTodoProvider {
 
   async processQueue() {
     const batch = this.processingQueue.splice(0, BATCH_SIZE);
-    await this.processFileBatch(batch);
-    if (this.processingQueue.length > 0) {
-      this.debounceProcess();
+    if (batch.length > 0) {
+      await this.processFileBatch(batch);
+      if (this.processingQueue.length > 0) {
+        this.debounceProcess();
+      }
     }
   }
 
-  async processFileBatch(filePaths) {
-    await Promise.allSettled(
-      filePaths.map(filePath =>
-        this.processSingleFile(filePath)
-          .catch(error => this.handleFileError(filePath, error))
-      )
-    );
-    this.updateView();
+  async processFileBatch(filePaths, isInitial = false) {
+    let processedCount = 0;
+    const updateInterval = 50;
+
+    for (const filePath of filePaths) {
+      try {
+        await this.processSingleFile(filePath);
+        processedCount++;
+
+        if (isInitial && processedCount % updateInterval === 0) {
+          this.updateView(true);
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      } catch (error) {
+        this.handleFileError(filePath, error);
+      }
+    }
+
+    if (!isInitial) {
+      this.updateView(true);
+    }
     this.applyHighlightsToAllEditors();
   }
 
@@ -113,23 +130,39 @@ class UltimateTodoProvider {
       const stats = await fs.stat(filePath);
       const cacheEntry = this.cache.get(filePath);
 
-      if (!this.shouldReprocess(cacheEntry, stats)) return;
+      if (cacheEntry?.mtime === stats.mtimeMs && this.isInitialized) return;
 
       const items = await this.parseFileStream(filePath);
-      this.updateMaps(filePath, items, stats.mtimeMs);
+      this.updateFileData(filePath, items, stats.mtimeMs);
     } catch (error) {
       if (error.code === 'ENOENT') {
         this.handleFileDelete(vscode.Uri.file(filePath));
+      } else {
+        throw error;
       }
     } finally {
       this.activeOperations.delete(filePath);
     }
   }
 
-  shouldReprocess(cacheEntry, stats) {
-    return !cacheEntry ||
-      cacheEntry.mtime !== stats.mtimeMs ||
-      !this.isInitialScanComplete;
+  updateFileData(filePath, newItems, mtime) {
+    const currentItems = this.fileMap.get(filePath) || [];
+    const itemsMap = new Map();
+
+    newItems.forEach(item => {
+      const key = `${item.line}:${item.position}`;
+      itemsMap.set(key, item);
+    });
+
+    const mergedItems = Array.from(itemsMap.values());
+
+    if (mergedItems.length > 0) {
+      this.fileMap.set(filePath, mergedItems);
+      this.cache.set(filePath, { mtime, items: mergedItems });
+    } else {
+      this.fileMap.delete(filePath);
+      this.cache.delete(filePath);
+    }
   }
 
   async parseFileStream(filePath) {
@@ -161,37 +194,6 @@ class UltimateTodoProvider {
     });
   }
 
-  updateMaps(filePath, items, mtime) {
-    const currentItems = this.fileMap.get(filePath) || [];
-    const mergedItems = this.mergeItems(currentItems, items);
-
-    if (mergedItems.length > 0) {
-      this.fileMap.set(filePath, mergedItems);
-      this.cache.set(filePath, { mtime, items: mergedItems });
-    } else {
-      this.fileMap.delete(filePath);
-      this.cache.delete(filePath);
-    }
-  }
-
-  mergeItems(oldItems, newItems) {
-    const itemMap = new Map();
-
-    newItems.forEach(item => {
-      const key = `${item.line}:${item.position}`;
-      itemMap.set(key, item);
-    });
-
-    oldItems.forEach(item => {
-      const key = `${item.line}:${item.position}`;
-      if (!itemMap.has(key)) {
-        itemMap.set(key, item);
-      }
-    });
-
-    return Array.from(itemMap.values());
-  }
-
   async loadCache() {
     try {
       const cacheData = await this.context.globalState.get(`todoCache_v${CACHE_VERSION}`, {});
@@ -215,9 +217,11 @@ class UltimateTodoProvider {
     }
   }
 
-  updateView() {
+  updateView(force = false) {
     this._onDidChange.fire();
-    this.saveCache();
+    if (force) {
+      this.saveCache();
+    }
   }
 
   applyHighlightsToAllEditors() {
@@ -255,15 +259,24 @@ class UltimateTodoProvider {
   }
 
   async getChildren(element) {
-    return element ? (element.children || []) : this.buildTreeStructure();
+    try {
+      if (element) {
+        return element.children || [];
+      }
+      return this.buildTreeStructure();
+    } catch (error) {
+      return [];
+    }
   }
 
   buildTreeStructure() {
     const tree = [];
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
+    if (!workspaceRoot) return tree;
+
     this.fileMap.forEach((items, filePath) => {
-      if (!workspaceRoot || !filePath.startsWith(workspaceRoot)) return;
+      if (!filePath.startsWith(workspaceRoot)) return;
 
       const relativePath = path.relative(workspaceRoot, filePath);
       const parts = relativePath.split(path.sep);
@@ -302,6 +315,14 @@ class UltimateTodoProvider {
 
     return tree.sort((a, b) => a.label.localeCompare(b.label));
   }
+
+  handleFileDelete(uri) {
+    const filePath = uri.fsPath;
+    this.fileMap.delete(filePath);
+    this.cache.delete(filePath);
+    this.updateView(true);
+    this.applyHighlightsToAllEditors();
+  }
 }
 
 function activate(context) {
@@ -313,7 +334,7 @@ function activate(context) {
     vscode.workspace.onDidSaveTextDocument(doc =>
       provider.queueProcessing(doc.uri, true)),
     vscode.window.onDidChangeActiveTextEditor(editor => {
-      if (editor) provider.applyHighlights(editor);
+      provider.applyHighlights(editor);
     }),
     {
       dispose: () => {
