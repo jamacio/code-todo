@@ -4,7 +4,7 @@
   "displayName": "Code TODO",
   "description": "Displays TODO comments in a tree view and adds a new icon to the menu to show all files with TODO flags.",
   "icon": "resources/icon.png",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "engines": {
     "vscode": "^1.99.0"
   },
@@ -23,7 +23,7 @@
     "onCommand:codeTODO.refresh",
     "onView:todoTreeView"
   ],
-  "main": "./out/extension.js",
+  "main": "./src/extension.js",
   "contributes": {
     "commands": [
       {
@@ -44,19 +44,18 @@
       "todoExplorer": [
         {
           "id": "todoTreeView",
-          "name": "Code TODO"
+          "name": "Code TODO",
+          "icon": "resources/todo.svg"
         }
       ]
     }
   },
   "scripts": {
     "prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": ""
   },
-  "devDependencies": {
-    "typescript": "^5.8.3",
-    "@types/vscode": "^1.99.1",
-    "@types/node": "^22.14.1"
+  "dependencies": {
+    "@parcel/fs": "^2.14.4",
+    "readable-stream": "^4.7.0"
   }
 }
