@@ -6,9 +6,9 @@ const readline = require('readline');
 
 const TAGS = ['BUG', 'HACK', 'FIXME', 'TODO', 'XXX'];
 const TAG_PATTERN = `\\b(${TAGS.join('|')})(?=\\s|:)[:]?\\s*(.*)`;
-const CACHE_VERSION = 12;
-const MAX_CONCURRENT_FILES = 75;
-const DEBOUNCE_TIME = 100;
+const CACHE_VERSION = 15;
+const MAX_CONCURRENT_FILES = 100;
+const DEBOUNCE_TIME = 25;
 
 class UltimateTodoProvider {
   constructor(context) {
@@ -37,6 +37,7 @@ class UltimateTodoProvider {
 
   async initialize() {
     await this.loadCache();
+    this.refreshTree();
     this.setupWatchers();
     this.applyHighlightsToAllEditors();
     this.startBackgroundProcessing();
@@ -48,7 +49,6 @@ class UltimateTodoProvider {
         '**/*.{js,ts,jsx,tsx,php,py,java,cs,cpp,h,html,css,md,json}',
         '**/{node_modules,vendor,dist,out,build,.git}/**'
       );
-
       this.updateFileList(uris);
       this.isInitialized = true;
     } catch (error) {
@@ -56,35 +56,26 @@ class UltimateTodoProvider {
     }
   }
 
+  refreshTree() {
+    this._onDidChange.fire();
+  }
+
   async updateFileList(uris) {
     const currentFiles = new Set(uris.map(uri => uri.fsPath));
-
-    // Process new files first
-    uris.forEach(uri => {
-      if (!this.cache.has(uri.fsPath)) {
-        this.queueProcessing(uri.fsPath, true);
-      }
-    });
-
-    // Remove deleted files
     Array.from(this.cache.keys()).forEach(filePath => {
-      if (!currentFiles.has(filePath)) {
-        this.handleFileDelete(vscode.Uri.file(filePath));
-      }
+      if (!currentFiles.has(filePath)) this.handleFileDelete(vscode.Uri.file(filePath));
     });
+    uris.forEach(uri => !this.cache.has(uri.fsPath) && this.queueProcessing(uri.fsPath, true));
   }
 
   setupWatchers() {
     const watcher = vscode.workspace.createFileSystemWatcher('**/*');
-
     this.context.subscriptions.push(
       watcher,
       watcher.onDidChange(uri => this.queueProcessing(uri.fsPath, true)),
       watcher.onDidCreate(uri => this.queueProcessing(uri.fsPath, true)),
       watcher.onDidDelete(uri => this.handleFileDelete(uri)),
-      vscode.window.onDidChangeActiveTextEditor(editor => {
-        if (editor) this.applyHighlights(editor);
-      })
+      vscode.window.onDidChangeActiveTextEditor(editor => this.applyHighlights(editor))
     );
   }
 
@@ -92,7 +83,7 @@ class UltimateTodoProvider {
     const filePath = uri.fsPath;
     this.fileMap.delete(filePath);
     this.cache.delete(filePath);
-    this.updateView();
+    this.updateView(true);
     this.applyHighlightsToAllEditors();
   }
 
@@ -110,29 +101,15 @@ class UltimateTodoProvider {
 
   async processQueue() {
     if (!this.isInitialized) return;
-
-    const batch = [];
-    const iterator = this.processingQueue.values();
-
-    while (batch.length < MAX_CONCURRENT_FILES) {
-      const { value, done } = iterator.next();
-      if (done) break;
-      batch.push(value);
-    }
+    const batch = Array.from(this.processingQueue).slice(0, MAX_CONCURRENT_FILES);
+    this.processingQueue = new Set([...this.processingQueue].slice(MAX_CONCURRENT_FILES));
 
     if (batch.length > 0) {
-      await this.processFileBatch(batch);
-      batch.forEach(file => this.processingQueue.delete(file));
+      await Promise.all(batch.map(filePath =>
+        this.processSingleFile(filePath).catch(console.error)));
+      this.updateView(true);
       this.debounceProcess();
     }
-  }
-
-  async processFileBatch(filePaths) {
-    await Promise.all(
-      filePaths.map(filePath =>
-        this.processSingleFile(filePath).catch(error => console.error(error))
-      ));
-    this.updateView();
   }
 
   async processSingleFile(filePath) {
@@ -142,16 +119,13 @@ class UltimateTodoProvider {
     try {
       const stats = await fs.stat(filePath);
       const cacheEntry = this.cache.get(filePath);
-
       if (cacheEntry?.mtime === stats.mtimeMs) return;
 
       const items = await this.parseFileStream(filePath);
       this.updateFileData(filePath, items, stats.mtimeMs);
       this.applyHighlightsForFile(filePath);
     } catch (error) {
-      if (error.code === 'ENOENT') {
-        this.handleFileDelete(vscode.Uri.file(filePath));
-      }
+      error.code === 'ENOENT' && this.handleFileDelete(vscode.Uri.file(filePath));
     } finally {
       this.activeOperations.delete(filePath);
     }
@@ -159,21 +133,12 @@ class UltimateTodoProvider {
 
   applyHighlightsForFile(filePath) {
     vscode.window.visibleTextEditors.forEach(editor => {
-      if (editor.document.uri.fsPath === filePath) {
-        this.applyHighlights(editor);
-      }
+      editor.document.uri.fsPath === filePath && this.applyHighlights(editor);
     });
   }
 
   updateFileData(filePath, newItems, mtime) {
-    const currentItems = this.fileMap.get(filePath) || [];
-    const itemsMap = new Map();
-
-    newItems.forEach(item => {
-      const key = `${item.line}:${item.position}`;
-      itemsMap.set(key, item);
-    });
-
+    const itemsMap = new Map(newItems.map(item => [`${item.line}:${item.position}`, item]));
     const mergedItems = Array.from(itemsMap.values());
 
     if (mergedItems.length > 0) {
@@ -188,29 +153,24 @@ class UltimateTodoProvider {
   async parseFileStream(filePath) {
     return new Promise((resolve, reject) => {
       const items = [];
-      const stream = createReadStream(filePath, { encoding: "utf8" });
-      const rl = readline.createInterface({ input: stream });
+      const rl = readline.createInterface({ input: createReadStream(filePath, 'utf8') });
       let lineNumber = 0;
 
-      rl.on("line", line => {
-        const matches = [...line.matchAll(new RegExp(TAG_PATTERN, "g"))];
-        matches.forEach(match => {
+      rl.on('line', line => {
+        [...line.matchAll(new RegExp(TAG_PATTERN, 'g'))].forEach(match => {
           const [_, tag, comment] = match;
-          if (TAGS.includes(tag)) {
-            items.push({
-              tag: tag,
-              text: comment.trim(),
-              line: lineNumber,
-              position: match.index,
-              file: filePath
-            });
-          }
+          TAGS.includes(tag) && items.push({
+            tag, text: comment.trim(),
+            line: lineNumber,
+            position: match.index,
+            file: filePath
+          });
         });
         lineNumber++;
       });
 
-      rl.on("close", () => resolve(items));
-      rl.on("error", reject);
+      rl.on('close', () => resolve(items));
+      rl.on('error', reject);
     });
   }
 
@@ -230,107 +190,82 @@ class UltimateTodoProvider {
 
   async saveCache() {
     try {
-      const cacheData = Object.fromEntries(this.cache);
-      await this.context.globalState.update(`todoCache_v${CACHE_VERSION}`, cacheData);
+      await this.context.globalState.update(`todoCache_v${CACHE_VERSION}`, Object.fromEntries(this.cache));
     } catch (error) {
       console.error('Cache save error:', error);
     }
   }
 
   updateView(force = false) {
-    this._onDidChange.fire();
-    if (force) {
-      this.saveCache();
-    }
+    this.refreshTree();
+    force && this.saveCache();
   }
 
   applyHighlightsToAllEditors() {
-    vscode.window.visibleTextEditors.forEach(editor => {
-      this.applyHighlights(editor);
-    });
+    vscode.window.visibleTextEditors.forEach(editor => this.applyHighlights(editor));
   }
 
-  applyHighlights(editor = vscode.window.activeTextEditor) {
+  applyHighlights(editor) {
     try {
       if (!editor) return;
-
       const uri = editor.document.uri.fsPath;
       const items = this.fileMap.get(uri) || [];
 
-      const validItems = items.filter(item =>
-        TAGS.includes(item.tag) && item.tag === item.tag.toUpperCase()
-      );
-
-      const ranges = validItems.map(item =>
-        new vscode.Range(
+      const ranges = items
+        .filter(item => TAGS.includes(item.tag) && item.tag === item.tag.toUpperCase())
+        .map(item => new vscode.Range(
           new vscode.Position(item.line, item.position),
           new vscode.Position(item.line, item.position + item.tag.length)
-        )
-      );
+        ));
 
       editor.setDecorations(this.decorationType, ranges);
     } catch (error) {
-      vscode.window.showErrorMessage(`Highlighting failed: ${error.message}`);
+      console.error('Highlight error:', error);
     }
   }
 
-  getTreeItem(element) {
-    return element;
-  }
+  getTreeItem(element) { return element; }
 
   async getChildren(element) {
-    try {
-      if (element) {
-        return element.children || [];
-      }
-      return this.buildTreeStructure();
-    } catch (error) {
-      return [];
-    }
+    return element ? element.children : this.buildTreeStructure();
   }
 
   buildTreeStructure() {
     const tree = [];
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-
     if (!workspaceRoot) return tree;
 
     this.fileMap.forEach((items, filePath) => {
       if (!filePath.startsWith(workspaceRoot)) return;
-
       const relativePath = path.relative(workspaceRoot, filePath);
-      const parts = relativePath.split(path.sep);
       let currentLevel = tree;
 
-      parts.forEach((part, index) => {
+      relativePath.split(path.sep).forEach((part, index) => {
         let node = currentLevel.find(n => n.label === part);
         if (!node) {
           node = {
             label: part,
             children: [],
             collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
-            path: path.join(workspaceRoot, ...parts.slice(0, index + 1))
+            path: path.join(workspaceRoot, ...relativePath.split(path.sep).slice(0, index + 1))
           };
           currentLevel.push(node);
         }
         currentLevel = node.children;
       });
 
-      items.forEach(item => {
-        currentLevel.push({
-          label: `[${item.tag}] ${item.text}`,
-          description: `Line ${item.line + 1}`,
-          tooltip: `${relativePath}:${item.line + 1}`,
-          command: {
-            command: "vscode.open",
-            title: "Open File",
-            arguments: [
-              vscode.Uri.file(filePath),
-              { selection: new vscode.Range(item.line, 0, item.line, 0) }
-            ]
-          }
-        });
-      });
+      items.forEach(item => currentLevel.push({
+        label: `[${item.tag}] ${item.text}`,
+        description: `Line ${item.line + 1}`,
+        command: {
+          command: "vscode.open",
+          title: "Open File",
+          arguments: [
+            vscode.Uri.file(filePath),
+            { selection: new vscode.Range(item.line, 0, item.line, 0) }
+          ]
+        }
+      }));
     });
 
     return tree.sort((a, b) => a.label.localeCompare(b.label));
@@ -339,29 +274,14 @@ class UltimateTodoProvider {
 
 function activate(context) {
   const provider = new UltimateTodoProvider(context);
-
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("todoTreeView", provider),
-    vscode.commands.registerCommand("codeTODO.refresh", () => provider.backgroundFullScan()),
-    vscode.workspace.onDidSaveTextDocument(doc =>
-      provider.queueProcessing(doc.uri, true)),
-    vscode.window.onDidChangeActiveTextEditor(editor => {
-      provider.applyHighlights(editor);
-    }),
-    {
-      dispose: () => {
-        provider.saveCache();
-      }
-    }
+    vscode.commands.registerCommand("codeTODO.refresh", () => provider.startBackgroundProcessing()),
+    { dispose: () => provider.saveCache() }
   );
-
-  provider.initialize();
   return provider;
 }
 
 function deactivate() { }
 
-module.exports = {
-  activate,
-  deactivate
-};
+module.exports = { activate, deactivate };
