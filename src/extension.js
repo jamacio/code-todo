@@ -22,9 +22,9 @@ class UltimateTodoProvider {
     this.isInitialScanComplete = false;
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
-      backgroundColor: new vscode.ThemeColor("editor.selectionBackground"),
       overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.addedForeground"),
-      border: "1px solid rgba(255,255,255,0.3)",
+      backgroundColor: "white",
+      border: "1px solid white",
     });
 
     this._onDidChange = new vscode.EventEmitter();
@@ -177,13 +177,11 @@ class UltimateTodoProvider {
   mergeItems(oldItems, newItems) {
     const itemMap = new Map();
 
-    // Primeiro adiciona os novos itens
     newItems.forEach(item => {
       const key = `${item.line}:${item.position}`;
       itemMap.set(key, item);
     });
 
-    // Mantém itens antigos que não foram sobrescritos
     oldItems.forEach(item => {
       const key = `${item.line}:${item.position}`;
       if (!itemMap.has(key)) {
@@ -252,7 +250,6 @@ class UltimateTodoProvider {
     }
   }
 
-  // Tree View implementation
   getTreeItem(element) {
     return element;
   }
