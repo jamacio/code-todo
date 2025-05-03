@@ -4,7 +4,7 @@
   "displayName": "Code TODO",
   "description": "Displays TODO comments in a tree view and adds a new icon to the menu to show all files with TODO flags.",
   "icon": "resources/icon.png",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "engines": {
     "vscode": "^1.99.0"
   },

@@ -1,3 +1,4 @@
+// © 2025 Jamácio Rocha - Licensed under Non-Commercial OSS
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs').promises;
@@ -6,7 +7,7 @@ const readline = require('readline');
 
 const TAGS = ['BUG', 'HACK', 'FIXME', 'TODO', 'XXX'];
 const TAG_PATTERN = `\\b(${TAGS.join('|')})(?=\\s|:)[:]?\\s*(.*)`;
-const CACHE_VERSION = 15;
+const CACHE_VERSION = 18;
 const MAX_CONCURRENT_FILES = 100;
 const DEBOUNCE_TIME = 25;
 
