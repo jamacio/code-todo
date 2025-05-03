@@ -20,8 +20,8 @@
     "url": "https://github.com/jamacio/code-todo.git"
   },
   "activationEvents": [
-    "onCommand:codeTODO.refresh",
-    "onView:todoTreeView"
+    "onStartupFinished",
+    "workspaceContains:**/*.{js,ts,jsx,tsx,php,py,java,cs,cpp,h,html,css,md,json}"
   ],
   "main": "./src/extension.js",
   "contributes": {
