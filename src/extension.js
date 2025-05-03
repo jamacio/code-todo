@@ -5,7 +5,7 @@ const { createReadStream } = require("fs");
 const readline = require("readline");
 
 const TAGS = ["BUG", "HACK", "FIXME", "TODO", "XXX"];
-const TAG_PATTERN = `\\b(${TAGS.join("|")})\\b:?\\s*(.*)`;
+const TAG_PATTERN = `\\b(${TAGS.join("|")})(?=\\s|:)[:]?\\s*(.*)`;
 const CACHE_VERSION = 7;
 const MAX_FILES = 20000;
 const BATCH_SIZE = 200;
