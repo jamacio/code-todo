@@ -23,7 +23,6 @@
     "onStartupFinished",
     "workspaceContains:**/*.{js,ts,jsx,tsx,php,py,java,cs,cpp,h,html,css,md,json}"
   ],
-  "main": "./src/extension.js",
   "contributes": {
     "commands": [
       {
@@ -50,9 +49,17 @@
       ]
     }
   },
+  "main": "./out/extension.js",
   "scripts": {
-    "prepublish": "npm run compile",
-    "compile": ""
+    "build": "webpack --mode production",
+    "compile": "webpack --mode production",
+    "package": "npm run build && vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "ts-loader": "^9.5.2",
+    "webpack": "^5.99.7",
+    "webpack-cli": "^5.1.4"
   },
   "dependencies": {
     "@parcel/fs": "^2.14.4",

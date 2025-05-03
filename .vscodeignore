@@ -1,0 +1,19 @@
+# .vscodeignore
+.vscode/**
+node_modules/**
+src/**
+.git/**
+.github/**
+.gitignore
+*.map
+*.ts
+*.log
+yarn.lock
+package-lock.json
+tsconfig.json
+webpack.config.js
+.eslintrc
+*.md
+*.todo
+TODO
+CHANGELOG
