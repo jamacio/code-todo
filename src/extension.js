@@ -211,7 +211,7 @@ class UltimateTodoProvider {
       let lineNumber = 0;
 
       rl.on('line', (line) => {
-        const matches = [...line.matchAll(new RegExp(TAG_PATTERN, 'gi'))];
+        const matches = [...line.matchAll(new RegExp(TAG_PATTERN, 'g'))];
 
         for (const match of matches) {
           const [_, tag, comment] = match;
