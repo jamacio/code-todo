@@ -7,10 +7,10 @@ const readline = require('readline');
 
 const TAGS = ['BUG', 'HACK', 'FIXME', 'TODO', 'XXX'];
 const TAG_PATTERN = `\\b(${TAGS.join('|')})(?=\\s|:)[:]?\\s*(.*)`;
-const CACHE_VERSION = 19;
+const CACHE_VERSION = 36;
 const MAX_CONCURRENT_FILES = 100;
 const DEBOUNCE_TIME = 25;
-const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const BATCH_DISPLAY_SIZE = 5;
 
 class UltimateTodoProvider {
   constructor(context) {
@@ -21,6 +21,8 @@ class UltimateTodoProvider {
     this.processingQueue = new Set();
     this.debounceTimer = null;
     this.isInitialized = false;
+    this.initialScanComplete = false;
+    this.accumulatedTodos = 0;
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
       overviewRulerColor: new vscode.ThemeColor('editorOverviewRuler.addedForeground'),
@@ -41,9 +43,7 @@ class UltimateTodoProvider {
 
   async initialize() {
     await this.loadCache();
-    this.refresh();
     this.setupWatchers();
-    this.applyHighlightsToAllEditors();
     await this.startBackgroundProcessing();
   }
 
@@ -53,14 +53,6 @@ class UltimateTodoProvider {
 
   async startBackgroundProcessing() {
     try {
-      const lastFullScan = await this.context.globalState.get('lastFullScanTimestamp', 0);
-      const now = Date.now();
-
-      if (now - lastFullScan > ONE_WEEK_MS) {
-        await this.performWeeklyScan(now);
-        await this.context.globalState.update('lastFullScanTimestamp', now);
-      }
-
       const uris = await vscode.workspace.findFiles(
         '**/*.{js,ts,jsx,tsx,php,py,java,cs,cpp,h,html,css,md,json}',
         '**/{node_modules,vendor,dist,out,build,.git}/**'
@@ -68,16 +60,39 @@ class UltimateTodoProvider {
 
       this.updateFileList(uris);
       this.isInitialized = true;
+
+      if (!this.initialScanComplete) {
+        await this.processFullDiscovery();
+        this.initialScanComplete = true;
+        await this.saveCache();
+      }
     } catch (error) {
       vscode.window.showErrorMessage(`Background processing failed: ${error.message}`);
     }
   }
 
-  async performWeeklyScan(timestamp) {
-    this.cache.clear();
-    this.fileMap.clear();
-    this.refresh();
-    await this.saveCache();
+  async processFullDiscovery() {
+    const files = Array.from(this.processingQueue);
+    this.processingQueue.clear();
+
+    while (files.length > 0) {
+      const batch = files.splice(0, MAX_CONCURRENT_FILES);
+      const results = await Promise.all(batch.map(filePath =>
+        this.processSingleFile(filePath).catch(() => 0)
+      ));
+
+      const newTodos = results.reduce((sum, count) => sum + count, 0);
+      this.accumulatedTodos += newTodos;
+
+      while (this.accumulatedTodos >= BATCH_DISPLAY_SIZE) {
+        this.refresh();
+        this.accumulatedTodos -= BATCH_DISPLAY_SIZE;
+      }
+    }
+
+    if (this.accumulatedTodos > 0) {
+      this.refresh();
+    }
   }
 
   updateFileList(uris) {
@@ -91,7 +106,7 @@ class UltimateTodoProvider {
 
     uris.forEach(uri => {
       if (!this.cache.has(uri.fsPath)) {
-        this.queueProcessing(uri.fsPath, true);
+        this.processingQueue.add(uri.fsPath);
       }
     });
   }
@@ -101,8 +116,8 @@ class UltimateTodoProvider {
 
     this.context.subscriptions.push(
       watcher,
-      watcher.onDidChange(uri => this.queueProcessing(uri.fsPath, true)),
-      watcher.onDidCreate(uri => this.queueProcessing(uri.fsPath, true)),
+      watcher.onDidChange(uri => this.queueFileUpdate(uri.fsPath)),
+      watcher.onDidCreate(uri => this.queueFileUpdate(uri.fsPath)),
       watcher.onDidDelete(uri => this.handleFileDelete(uri)),
       vscode.window.onDidChangeActiveTextEditor(editor =>
         this.applyHighlights(editor)
@@ -115,24 +130,20 @@ class UltimateTodoProvider {
     this.fileMap.delete(filePath);
     this.cache.delete(filePath);
     this.updateView(true);
-    this.applyHighlightsToAllEditors();
   }
 
-  queueProcessing(filePath, isPriority = false) {
-    if (!this.processingQueue.has(filePath)) {
-      this.processingQueue.add(filePath);
-      this.debounceProcess();
-    }
+  queueFileUpdate(filePath) {
+    if (!this.initialScanComplete || this.processingQueue.has(filePath)) return;
+    this.processingQueue.add(filePath);
+    this.debounceProcess();
   }
 
   debounceProcess() {
     clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => this.processQueue(), DEBOUNCE_TIME);
+    this.debounceTimer = setTimeout(() => this.processIncrementalUpdates(), DEBOUNCE_TIME);
   }
 
-  async processQueue() {
-    if (!this.isInitialized) return;
-
+  async processIncrementalUpdates() {
     while (this.processingQueue.size > 0) {
       const batch = Array.from(this.processingQueue)
         .slice(0, MAX_CONCURRENT_FILES);
@@ -144,9 +155,7 @@ class UltimateTodoProvider {
 
       await Promise.all(batch.map(filePath =>
         this.processSingleFile(filePath)
-          .catch(error =>
-            console.error(`Error processing ${filePath}:`, error)
-          )
+          .catch(error => console.error(`Error processing ${filePath}:`, error))
       ));
 
       this.updateView(true);
@@ -154,24 +163,27 @@ class UltimateTodoProvider {
   }
 
   async processSingleFile(filePath) {
-    if (this.activeOperations.has(filePath)) return;
+    if (this.activeOperations.has(filePath)) return 0;
     this.activeOperations.add(filePath);
 
     try {
       const stats = await fs.stat(filePath);
       const cacheEntry = this.cache.get(filePath);
 
-      if (cacheEntry?.mtime === stats.mtimeMs) return;
+      if (cacheEntry?.mtime === stats.mtimeMs) return 0;
 
       const items = await this.parseFileStream(filePath);
+      const count = items.length;
       this.updateFileData(filePath, items, stats.mtimeMs);
       this.applyHighlightsForFile(filePath);
+      return count;
     } catch (error) {
       if (error.code === 'ENOENT') {
         this.handleFileDelete(vscode.Uri.file(filePath));
-      } else {
-        console.error(`Error processing ${filePath}:`, error);
+        return 0;
       }
+      console.error(`Error processing ${filePath}:`, error);
+      return 0;
     } finally {
       this.activeOperations.delete(filePath);
     }
@@ -246,6 +258,7 @@ class UltimateTodoProvider {
           this.fileMap.set(path, entry.items);
         }
       });
+      this.refresh();
     } catch (error) {
       vscode.window.showErrorMessage(`Cache load failed: ${error.message}`);
     }
@@ -264,13 +277,9 @@ class UltimateTodoProvider {
 
   updateView(force = false) {
     this.refresh();
-    if (force) this.saveCache();
-  }
-
-  applyHighlightsToAllEditors() {
-    vscode.window.visibleTextEditors.forEach(editor =>
-      this.applyHighlights(editor)
-    );
+    if (force && this.initialScanComplete) {
+      this.saveCache();
+    }
   }
 
   applyHighlights(editor) {
@@ -347,9 +356,13 @@ function activate(context) {
   const provider = new UltimateTodoProvider(context);
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("todoTreeView", provider),
-    vscode.commands.registerCommand("codeTODO.refresh", () =>
-      provider.startBackgroundProcessing()
-    ),
+    vscode.commands.registerCommand("codeTODO.refresh", () => {
+      provider.cache.clear();
+      provider.fileMap.clear();
+      provider.processingQueue.clear();
+      provider.initialScanComplete = false;
+      provider.startBackgroundProcessing();
+    }),
     { dispose: () => provider.saveCache() }
   );
   return provider;
