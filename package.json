@@ -4,7 +4,7 @@
   "displayName": "Code TODO",
   "description": "Displays TODO comments in a tree view and adds a new icon to the menu to show all files with TODO flags.",
   "icon": "resources/icon.png",
-  "version": "0.0.11",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.99.0"
   },
@@ -53,10 +53,18 @@
   "scripts": {
     "build": "webpack --mode production",
     "compile": "webpack --mode production",
-    "package": "npm run build && vsce package"
+    "package": "npm run build && vsce package",
+    "test": "node ./src/test/runTest.js",
+    "pretest": "npm run compile",
+    "test-compile": "tsc -p ./",
+    "lint": "eslint src --ext ts"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^2.5.2",
+    "glob": "^10.4.5",
+    "mocha": "^11.7.2",
     "ts-loader": "^9.5.2",
     "webpack": "^5.99.7",
     "webpack-cli": "^5.1.4"
