@@ -8,6 +8,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### 🚀 Performance Rewrite
 
+#### Added
+
+- **Tag-grouped tree view**: Sidebar now groups TODOs by tag type (TODO, FIXME, BUG, HACK, XXX, etc.) as top-level nodes, with folder structure nested beneath each tag
+
 #### Changed
 
 - **Incremental stats update**: Status bar now only processes the diff per file instead of iterating all items across all files on every keystroke
