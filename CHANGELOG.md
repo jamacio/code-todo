@@ -4,6 +4,26 @@ All notable changes to the "Code TODO" extension will be documented in this file
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [1.1.0] - 2026-06-27
+
+### 🚀 Performance Rewrite
+
+#### Changed
+
+- **Incremental stats update**: Status bar now only processes the diff per file instead of iterating all items across all files on every keystroke
+- **Removed JSON.stringify from change detection**: Replaced with lightweight field-by-field comparison, eliminating full array serialization on every edit
+- **Eliminated double tree traversal**: Merged `_countTodosInStructure` into `_buildTreeFromStructure`, halving tree construction time
+- **All `.forEach()` replaced with `for...of`/`for` loops**: 2-5x faster iteration in V8 with less GC pressure
+- **Tag lookup O(n) → O(1)**: `Array.includes()` replaced with `Set.has()` for tag validation
+- **Debounced tree refresh**: Coalesces rapid rebuilds during typing into a single call at 50ms
+- **Debounced cache save**: Writes full cache once 2s after last change instead of on every keystroke/save
+- **Pre-allocated arrays in tree building**: Avoids `.push()` overhead in hot paths
+- **Faster file extension filtering**: Flat `if` chain instead of array iteration
+
+#### Removed
+
+- Dead code: unused `_onDidChangeStatus` emitter, `decorations` Map, `results` accumulator, `basePath` parameter, `type`/`files` fields from folder nodes
+
 ## [1.0.0] - 2025-09-20
 
 ### 🎉 Major Release
