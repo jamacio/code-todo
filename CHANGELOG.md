@@ -4,6 +4,15 @@ All notable changes to the "Code TODO" extension will be documented in this file
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [1.1.1] - 2026-06-30
+
+### 🐛 Bug Fixes
+
+#### Fixed
+
+- **Tree view not loading when expanding tags**: `_tagStructures` Map was not initialized in the constructor, causing `TypeError` when `getChildren()` was called for tag nodes before `_buildTree()` had executed
+- **Tree expansion failing after refresh**: VS Code could call `getChildren()` on expanded tag elements before `getChildren(undefined)`, accessing `_tagStructures` before it was created
+
 ## [1.1.0] - 2026-06-27
 
 ### 🚀 Performance Rewrite

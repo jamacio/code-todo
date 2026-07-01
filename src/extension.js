@@ -55,6 +55,7 @@ class TodoTreeProvider {
     this.updateTimers = new Map();
     this.cachedTree = [];
     this.treeNeedsRebuild = true;
+    this._tagStructures = new Map();
     this.refreshTimer = null;
     this.saveCacheTimer = null;
     this.totalsByTag = {};
