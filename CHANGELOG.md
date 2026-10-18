@@ -4,6 +4,23 @@ All notable changes to the "Code TODO" extension will be documented in this file
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [1.2.0] - 2026-10-18
+
+### 🚀 Performance
+
+#### Changed
+
+- **Workspace scan powered by ripgrep**: The full scan now uses the ripgrep binary bundled with VS Code instead of opening and reading every file from JavaScript. ripgrep (native, multi-threaded) returns only the candidate lines, and the existing tag regex extracts tag, text and column from them, so results are identical. Measured on a ~7,000-file project: 2.7s → 55ms
+- **Supports the new ripgrep location**: Looks for `@vscode/ripgrep-universal/bin/<platform>-<arch>/rg` (recent VS Code releases) as well as the older `@vscode/ripgrep` and `vscode-ripgrep` paths
+- **Instant startup from cache**: Removed the per-file `fs.access` check when loading the cache; the tree is shown immediately and the scan that follows reconciles deleted files
+- **Unsaved editors take precedence**: After a scan, dirty documents are parsed from memory so unsaved TODOs are not overwritten by the on-disk content
+- **Scan respects `.gitignore`**: Git-ignored files are no longer scanned; lines longer than 1000 characters (minified code) are skipped
+
+#### Fixed
+
+- **Deleted files lingering in the tree**: The fallback scanner (used when ripgrep is not found) now removes files that no longer exist in the workspace
+- **"Commands should be registered" test failing**: The test now activates the extension before checking for `codeTODO.refresh`, since `onStartupFinished` activation may not have happened yet
+
 ## [1.1.1] - 2026-06-30
 
 ### 🐛 Bug Fixes

@@ -10,6 +10,9 @@ suite('Extension Test Suite', () => {
     });
 
     test('Commands should be registered', async () => {
+        // The extension activates on onStartupFinished, which may not have
+        // happened yet when the suite starts.
+        await vscode.extensions.getExtension('JamacioRocha.code-todo').activate();
         const commands = await vscode.commands.getCommands();
         assert.ok(commands.includes('codeTODO.refresh'));
     });

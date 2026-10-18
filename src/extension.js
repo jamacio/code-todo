@@ -1,13 +1,16 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs').promises;
-const { createReadStream } = require('fs');
+const { createReadStream, existsSync } = require('fs');
+const { spawn } = require('child_process');
 const readline = require('readline');
 
 const CACHE_VERSION = 45;
 const SUPPORTED_EXT = '{js,ts,jsx,tsx,vue,php,py,java,cs,cpp,h,hpp,html,css,scss,less,sass,md,txt,yaml,yml,json,xml,rb,go,rs,kt,swift,m,mm,dart,lua,pl,pm,sh,bash,zsh,ps1,psm1}';
 const WATCHER_GLOB = `**/*.${SUPPORTED_EXT}`;
-const EXCLUDE_GLOB = '**/{node_modules,vendor,dist,out,build,.git,.vscode,coverage,tmp,temp,__pycache__,venv,.venv,env,.env,bundle,.next,.nuxt,.cache,public/build}/**';
+const EXCLUDE_DIRS = ['node_modules', 'vendor', 'dist', 'out', 'build', '.git', '.vscode', 'coverage', 'tmp', 'temp', '__pycache__', 'venv', '.venv', 'env', '.env', 'bundle', '.next', '.nuxt', '.cache', 'public/build'];
+const EXCLUDE_GLOB = `**/{${EXCLUDE_DIRS.join(',')}}/**`;
+const EXCLUDE_FILES = ['*.min.js', '*.min.css', '*.map', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 const DEFAULT_TAGS = ['BUG', 'HACK', 'FIXME', 'TODO', 'XXX', 'NOTE', 'OPTIMIZE', 'REVIEW'];
 const TAG_ICONS = {
@@ -60,6 +63,11 @@ class TodoTreeProvider {
     this.saveCacheTimer = null;
     this.totalsByTag = {};
     this.totalTodos = 0;
+    this._rgPath = undefined;
+    this._rgProcess = null;
+    context.subscriptions.push({
+      dispose: () => { if (this._rgProcess) this._rgProcess.kill(); }
+    });
 
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -119,19 +127,15 @@ class TodoTreeProvider {
       const cacheData = this.context.globalState.get(`todoCache_v${CACHE_VERSION}`);
       if (!cacheData) return;
 
-      const entries = Object.entries(cacheData);
-      await Promise.all(entries.map(async ([filePath, entry]) => {
+      // No per-file fs.access here: the full scan that follows reconciles
+      // deleted files, so the cached tree can be shown immediately.
+      for (const filePath in cacheData) {
+        const entry = cacheData[filePath];
         if (entry?.items && Array.isArray(entry.items) && entry.items.length > 0) {
-          try {
-            await fs.access(filePath);
-            this.cache.set(filePath, entry);
-            this.fileMap.set(filePath, entry.items);
-          } catch {
-            this.cache.delete(filePath);
-            this.fileMap.delete(filePath);
-          }
+          this.cache.set(filePath, entry);
+          this.fileMap.set(filePath, entry.items);
         }
-      }));
+      }
 
       this._updateStats();
     } catch (error) {
@@ -144,15 +148,20 @@ class TodoTreeProvider {
     this.isScanning = true;
 
     try {
+      const rgPath = this._getRipgrepPath();
+      if (rgPath && await this._scanWithRipgrep(rgPath)) return;
+
       const uris = await vscode.workspace.findFiles(
         `**/*.${SUPPORTED_EXT}`,
         EXCLUDE_GLOB
       );
 
       const filesToProcess = [];
+      const found = new Set();
 
       for (let i = 0; i < uris.length; i++) {
         const filePath = uris[i].fsPath;
+        found.add(filePath);
         try {
           const stats = await fs.stat(filePath);
           const cacheEntry = this.cache.get(filePath);
@@ -164,6 +173,10 @@ class TodoTreeProvider {
         } catch {
           this._handleFileDelete(filePath);
         }
+      }
+
+      for (const filePath of [...this.fileMap.keys()]) {
+        if (!found.has(filePath)) this._handleFileDelete(filePath);
       }
 
       if (filesToProcess.length > 0) {
@@ -183,6 +196,138 @@ class TodoTreeProvider {
     } finally {
       this.isScanning = false;
     }
+  }
+
+  _getRipgrepPath() {
+    if (this._rgPath !== undefined) return this._rgPath;
+
+    // VS Code ships ripgrep; its location has moved across releases.
+    const exe = process.platform === 'win32' ? 'rg.exe' : 'rg';
+    const platformDir = `${process.platform}-${process.arch}`;
+    const appRoot = vscode.env.appRoot;
+    const candidates = [
+      path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep-universal', 'bin', platformDir, exe),
+      path.join(appRoot, 'node_modules', '@vscode', 'ripgrep-universal', 'bin', platformDir, exe),
+      path.join(appRoot, 'node_modules.asar.unpacked', '@vscode', 'ripgrep', 'bin', exe),
+      path.join(appRoot, 'node_modules', '@vscode', 'ripgrep', 'bin', exe),
+      path.join(appRoot, 'node_modules.asar.unpacked', 'vscode-ripgrep', 'bin', exe),
+      path.join(appRoot, 'node_modules', 'vscode-ripgrep', 'bin', exe),
+    ];
+
+    this._rgPath = null;
+    for (let i = 0; i < candidates.length; i++) {
+      if (existsSync(candidates[i])) {
+        this._rgPath = candidates[i];
+        break;
+      }
+    }
+    return this._rgPath;
+  }
+
+  // Native multi-threaded search: ripgrep only returns candidate lines, so
+  // no file is opened or stat'ed from JS. Returns false if rg can't run.
+  async _scanWithRipgrep(rgPath) {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const results = new Map();
+
+    for (let i = 0; i < folders.length; i++) {
+      if (folders[i].uri.scheme !== 'file') continue;
+      const ok = await this._runRipgrep(rgPath, folders[i].uri.fsPath, results);
+      if (!ok) {
+        this._rgPath = null;
+        return false;
+      }
+    }
+
+    // Unsaved editors take precedence over what is on disk.
+    const docs = vscode.workspace.textDocuments;
+    for (let i = 0; i < docs.length; i++) {
+      const doc = docs[i];
+      if (!doc.isDirty || doc.uri.scheme !== 'file' || !this._shouldProcessFile(doc.uri.fsPath)) continue;
+      const items = this._parseContent(doc.getText(), doc.uri.fsPath);
+      if (items.length > 0) results.set(doc.uri.fsPath, items);
+      else results.delete(doc.uri.fsPath);
+    }
+
+    this.fileMap = results;
+    this.cache = new Map();
+    for (const [filePath, items] of results) {
+      this.cache.set(filePath, { items });
+    }
+
+    this._updateStats();
+    this._applyHighlightsToActiveEditor();
+    this.treeNeedsRebuild = true;
+    this._debouncedRefresh();
+    await this._saveCache();
+    return true;
+  }
+
+  _runRipgrep(rgPath, folder, results) {
+    const args = [
+      '--no-messages', '--no-config', '--color', 'never',
+      '--no-heading', '--with-filename', '--line-number', '--null', '--hidden',
+      '--max-columns', '1000',
+      '--max-filesize', `${Math.floor(todoConfig.maxFileSize / 1024)}K`,
+      '-g', `*.${SUPPORTED_EXT}`,
+    ];
+    for (let i = 0; i < EXCLUDE_DIRS.length; i++) args.push('-g', `!**/${EXCLUDE_DIRS[i]}/**`);
+    for (let i = 0; i < EXCLUDE_FILES.length; i++) args.push('-g', `!${EXCLUDE_FILES[i]}`);
+    // Coarse filter only; the JS regex below extracts tag, text and column.
+    const tagPattern = todoConfig.tags.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    args.push('-e', `\\b(${tagPattern})\\b`, folder);
+
+    return new Promise(resolve => {
+      let child;
+      try {
+        child = spawn(rgPath, args, { cwd: folder });
+      } catch {
+        resolve(false);
+        return;
+      }
+      this._rgProcess = child;
+
+      // Output per line: <path>\0<line>:<text>
+      const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+      rl.on('line', (line) => {
+        const sep = line.indexOf('\0');
+        if (sep < 0) return;
+        const colon = line.indexOf(':', sep + 1);
+        if (colon < 0) return;
+        const filePath = line.slice(0, sep);
+        const lineNumber = parseInt(line.slice(sep + 1, colon), 10) - 1;
+        const text = line.slice(colon + 1);
+
+        this.regex.lastIndex = 0;
+        let match;
+        while ((match = this.regex.exec(text)) !== null) {
+          const tag = match[1].toUpperCase();
+          if (todoConfig.tagSet.has(tag)) {
+            let items = results.get(filePath);
+            if (!items) {
+              items = [];
+              results.set(filePath, items);
+            }
+            items.push(new TodoItem(tag, match[2].trim(), lineNumber, match.index, filePath));
+          }
+        }
+      });
+
+      let spawnFailed = false;
+      child.on('error', () => {
+        spawnFailed = true;
+        this._rgProcess = null;
+        rl.close();
+        resolve(false);
+      });
+      // Exit code 1 means "no matches"; 2 can still carry valid partial
+      // results (e.g. unreadable subfolders), so only a spawn error fails.
+      child.on('close', () => {
+        this._rgProcess = null;
+        rl.close();
+        resolve(!spawnFailed);
+      });
+    });
   }
 
   async _processFilesInBatches(files) {

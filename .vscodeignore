@@ -1,5 +1,6 @@
 # .vscodeignore
 .vscode/**
+.claude/**
 node_modules/**
 src/**
 .git/**
